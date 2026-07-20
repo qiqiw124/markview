@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# SwiftPM
+.build/
+.swiftpm/
+Package.resolved
+
+# 本地工具元数据
+.hermes/
+
+# 分发产物（本地重建；正式 release 走 GitHub Releases）
+dist/MarkView.app/
+dist/*.zip
+dist/*.dmg

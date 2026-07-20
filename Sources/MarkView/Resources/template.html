@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="__DARK_CLASS__">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>__CSS__</style>
+<style>__HL_CSS__</style>
+<style>
+:root { --base-font-size: __BASE_FONT_SIZE__px; }
+body { font-size: var(--base-font-size); }
+mark.mv-hl { background: #ffe58a; color: #1f2329; padding: 0 2px; border-radius: 2px; }
+mark.mv-hl.current { background: #ffaa33; outline: 2px solid #d63384; }
+html.dark mark.mv-hl { background: #6b5400; color: #fff; }
+html.dark mark.mv-hl.current { background: #c97a00; outline: 2px solid #ff9ec4; }
+.mermaid { background: var(--bg-soft); padding: 16px; border-radius: 8px; margin: 1em 0; text-align: center; }
+</style>
+</head>
+<body>
+<div id="doc">__CONTENT__</div>
+<script>
+// 滚动到锚点
+function scrollToAnchor(id) {
+    var el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// 收集大纲并回传 Swift
+function collectOutline() {
+    var headings = Array.from(
+        document.querySelectorAll("#doc h1, #doc h2, #doc h3, #doc h4, #doc h5, #doc h6")
+    );
+    var outline = headings.map(function (h, idx) {
+        return {
+            id: h.id || ("h-" + idx),
+            level: Number(h.tagName.substring(1)),
+            text: h.textContent.trim()
+        };
+    });
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.outline) {
+        window.webkit.messageHandlers.outline.postMessage(JSON.stringify(outline));
+    }
+    return outline;
+}
+
+// 滚动时高亮当前章节
+function setupScrollSpy() {
+    var headings = Array.from(
+        document.querySelectorAll("#doc h1, #doc h2, #doc h3, #doc h4, #doc h5, #doc h6")
+    );
+    if (headings.length === 0) return;
+    function update() {
+        var current = headings[0];
+        var offset = 80;
+        for (var i = 0; i < headings.length; i++) {
+            if (headings[i].getBoundingClientRect().top - offset <= 0) current = headings[i];
+            else break;
+        }
+        headings.forEach(function(h){h.classList.remove('outline-active')});
+        if (current) {
+            current.classList.add('outline-active');
+            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.spy) {
+                window.webkit.messageHandlers.spy.postMessage(current.id);
+            }
+        }
+    }
+    window.addEventListener("scroll", update, { passive: true });
+    update();
+}
+
+// 搜索高亮：在 #doc 容器中遍历文本节点，wrap <mark class="mv-hl">
+var __searchMatches = [];
+var __searchCursor = 0;
+
+function clearSearch() {
+    var marks = document.querySelectorAll('mark.mv-hl');
+    marks.forEach(function (m) {
+        var parent = m.parentNode;
+        while (m.firstChild) parent.insertBefore(m.firstChild, m);
+        parent.removeChild(m);
+        parent.normalize();
+    });
+    __searchMatches = [];
+    __searchCursor = 0;
+}
+
+function runSearch(keyword) {
+    clearSearch();
+    if (!keyword) return;
+    var doc = document.getElementById('doc');
+    var lower = keyword.toLowerCase();
+    var walker = document.createTreeWalker(doc, NodeFilter.SHOW_TEXT, null);
+    var targets = [];
+    var node;
+    while ((node = walker.nextNode())) {
+        if (node.nodeValue.toLowerCase().indexOf(lower) >= 0) targets.push(node);
+    }
+    targets.forEach(function (n) {
+        var text = n.nodeValue;
+        var frag = document.createDocumentFragment();
+        var i = 0;
+        while (i < text.length) {
+            var idx = text.toLowerCase().indexOf(lower, i);
+            if (idx < 0) {
+                frag.appendChild(document.createTextNode(text.substring(i)));
+                break;
+            }
+            if (idx > i) frag.appendChild(document.createTextNode(text.substring(i, idx)));
+            var m = document.createElement('mark');
+            m.className = 'mv-hl';
+            m.textContent = text.substring(idx, idx + keyword.length);
+            frag.appendChild(m);
+            __searchMatches.push(m);
+            i = idx + keyword.length;
+        }
+        n.parentNode.replaceChild(frag, n);
+    });
+    __searchCursor = 0;
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.search) {
+        window.webkit.messageHandlers.search.postMessage({
+            count: __searchMatches.length,
+            firstIndex: 0
+        });
+    }
+    jumpTo(0);
+}
+
+function jumpTo(index) {
+    if (__searchMatches.length === 0) return;
+    __searchMatches.forEach(function (m) { m.classList.remove('current'); });
+    var safe = ((index % __searchMatches.length) + __searchMatches.length) % __searchMatches.length;
+    __searchCursor = safe;
+    var target = __searchMatches[safe];
+    target.classList.add('current');
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+// Swift 调用入口
+window.__markview = {
+    scrollToAnchor: scrollToAnchor,
+    collectOutline: collectOutline,
+    runSearch: runSearch,
+    jumpTo: jumpTo,
+    clearSearch: clearSearch
+};
+
+</script></body>
+</html>

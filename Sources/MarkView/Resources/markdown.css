@@ -1,0 +1,157 @@
+/* MarkView — 飞书风排版 CSS
+   特点：左侧色块标题、舒适行距、圆角代码块、清爽表格、引用左条。
+   自动跟随系统深浅色；Swift 端可在 <html> 加 class="dark" 强制深色。 */
+
+:root {
+    --fg: #1f2329;
+    --fg-muted: #646a73;
+    --bg: #ffffff;
+    --bg-soft: #f7f8fa;
+    --border: #dee0e3;
+    --accent: #3370ff;
+    --code-bg: #f5f6f7;
+    --code-fg: #1f2329;
+    --inline-code-bg: rgba(51, 112, 255, 0.08);
+    --inline-code-fg: #d63384;
+    --blockquote-bar: #3370ff;
+    --table-stripe: #fafbfc;
+}
+
+html.dark {
+    --fg: #e7e9ea;
+    --fg-muted: #9aa0a6;
+    --bg: #1e1f22;
+    --bg-soft: #262729;
+    --border: #383a3d;
+    --accent: #4c88ff;
+    --code-bg: #2a2b2e;
+    --code-fg: #e7e9ea;
+    --inline-code-bg: rgba(76, 136, 255, 0.16);
+    --inline-code-fg: #ff9ec4;
+    --blockquote-bar: #4c88ff;
+    --table-stripe: #232426;
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    padding: 40px 56px 120px 56px;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC",
+        "Helvetica Neue", "Segoe UI", Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.78;
+    color: var(--fg);
+    background: var(--bg);
+    -webkit-font-smoothing: antialiased;
+}
+
+/* 标题：左侧色条 + 紧凑层级 */
+h1, h2, h3, h4, h5, h6 {
+    margin: 1.6em 0 0.6em;
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--fg);
+    scroll-margin-top: 24px;
+}
+h1 { font-size: 26px; margin-top: 0.4em; }
+h2 {
+    font-size: 21px;
+    border-left: 4px solid var(--accent);
+    padding-left: 12px;
+    margin-top: 1.8em;
+}
+h3 { font-size: 18px; }
+h4 { font-size: 16px; color: var(--fg-muted); }
+h5, h6 { font-size: 14px; color: var(--fg-muted); }
+
+p { margin: 0.6em 0; }
+
+/* 飞书风：斜体不真的倾斜，用底色区分 */
+em, i { font-style: normal; }
+
+a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+}
+a:hover { border-bottom-color: var(--accent); }
+
+/* 行内代码 */
+code {
+    font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 0.88em;
+    background: var(--inline-code-bg);
+    color: var(--inline-code-fg);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+/* 代码块 */
+pre {
+    margin: 1em 0;
+    padding: 16px 18px;
+    background: var(--code-bg);
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.6;
+}
+pre code {
+    background: none;
+    color: var(--code-fg);
+    padding: 0;
+    font-size: inherit;
+}
+
+/* 引用 */
+blockquote {
+    margin: 1em 0;
+    padding: 8px 16px;
+    border-left: 3px solid var(--blockquote-bar);
+    background: var(--bg-soft);
+    border-radius: 0 6px 6px 0;
+    color: var(--fg-muted);
+}
+blockquote p { margin: 0.3em 0; }
+
+/* 列表 */
+ul, ol { margin: 0.5em 0; padding-left: 1.6em; }
+li { margin: 0.25em 0; }
+li > ul, li > ol { margin: 0.25em 0; }
+
+/* 表格 */
+table {
+    margin: 1em 0;
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 14px;
+    border-radius: 8px;
+    overflow: hidden;
+}
+th, td {
+    padding: 9px 14px;
+    border: 1px solid var(--border);
+    text-align: left;
+}
+th { background: var(--bg-soft); font-weight: 600; }
+tbody tr:nth-child(even) { background: var(--table-stripe); }
+
+/* 图片 */
+img {
+    max-width: 100%;
+    border-radius: 8px;
+    margin: 0.5em 0;
+}
+
+hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 2em 0;
+}
+
+/* 当前大纲高亮的标题 */
+h1.outline-active, h2.outline-active, h3.outline-active,
+h4.outline-active, h5.outline-active, h6.outline-active {
+    color: var(--accent);
+}
