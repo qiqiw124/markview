@@ -56,7 +56,10 @@ struct MarkdownWebView: NSViewRepresentable {
         context.coordinator.fontScale = fontScale
         DispatchQueue.main.async { context.coordinator.fontScale = self.fontScale }
         render(into: webView, coordinator: context.coordinator)
-        DispatchQueue.main.async { self.coordinatorBox?.coordinator = context.coordinator }
+        // 创建 CoordinatorBox 并设置 coordinator，同步给 activeWebView.ref（用于搜索等外部调用）
+        let box = CoordinatorBox()
+        box.coordinator = context.coordinator
+        self.coordinatorBox = box
         return webView
     }
 

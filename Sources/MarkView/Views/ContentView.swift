@@ -36,6 +36,7 @@ struct ContentView: View {
     @State private var fontScale: Double = 1.0
     @State private var showSearch: Bool = false
     @State private var searchKeyword: String = ""
+    @State private var editorSearchFocus: Int = 0
     @State private var isDropTargeted: Bool = false
 
     private let mdType = UTType(filenameExtension: "md") ?? UTType.plainText
@@ -56,6 +57,7 @@ struct ContentView: View {
                             isDarkForced: $isDarkForced,
                             showSearch: $showSearch,
                             searchKeyword: $searchKeyword,
+                            editorSearchFocus: $editorSearchFocus,
                             activeWebView: activeWebView,
                             onDropURLs: handleDropURLs,
                             onOpen: { openFile() }
@@ -73,6 +75,9 @@ struct ContentView: View {
                             }
                         ) { next in
                             activeWebView.ref?.search(keyword: searchKeyword, forward: next)
+                            // 同步更新编辑器搜索焦点
+                            if next { editorSearchFocus += 1 }
+                            else { editorSearchFocus = max(0, editorSearchFocus - 1) }
                         }
                         .padding(8)
                         .transition(.move(edge: .top).combined(with: .opacity))
@@ -362,6 +367,7 @@ struct TabDetailView: View {
     @Binding var isDarkForced: Bool
     @Binding var showSearch: Bool
     @Binding var searchKeyword: String
+    @Binding var editorSearchFocus: Int
     let activeWebView: ActiveWebView
     let onDropURLs: ([URL]) -> Void
     let onOpen: () -> Void
@@ -374,17 +380,32 @@ struct TabDetailView: View {
             if store.fileURL == nil {
                 EmptyStateView(onOpen: onOpen)
             } else {
-                switch viewMode {
-                case .split:
-                    HSplitView {
-                        SourceEditor(text: $store.source, isDirty: $store.isDirty)
-                            .frame(minWidth: 280)
+                // 始终保持 SourceEditor 和 webView 在视图树中，
+                // 通过 GeometryReader + frame(width:) 控制宽度，
+                // 避免 NSTextView/WKWebView 被重建
+                GeometryReader { geo in
+                    HStack(spacing: viewMode == .split ? 4 : 0) {
+                        SourceEditor(
+                            text: $store.source,
+                            isDirty: $store.isDirty,
+                            searchKeyword: $searchKeyword,
+                            searchFocus: $editorSearchFocus
+                        )
+                        .frame(width: editorWidth(total: geo.size.width))
+                        .opacity(viewMode == .preview ? 0 : 1)
+                        .allowsHitTesting(viewMode != .preview)
+                        .clipped()
+
+                        if viewMode == .split {
+                            Divider()
+                        }
+
                         webView
+                            .frame(width: previewWidth(total: geo.size.width))
+                            .opacity(viewMode == .source ? 0 : 1)
+                            .allowsHitTesting(viewMode != .source)
+                            .clipped()
                     }
-                case .preview:
-                    webView
-                case .source:
-                    SourceEditor(text: $store.source, isDirty: $store.isDirty)
                 }
             }
         }
@@ -393,6 +414,25 @@ struct TabDetailView: View {
                 store.isDirty = true
             }
             scheduleAutoSave(source: newSource)
+        }
+        .onChange(of: searchKeyword) { _ in
+            editorSearchFocus = 0
+        }
+    }
+
+    private func editorWidth(total: CGFloat) -> CGFloat {
+        switch viewMode {
+        case .preview: return 0
+        case .source:  return total
+        case .split:   return (total - 4) * 0.5
+        }
+    }
+
+    private func previewWidth(total: CGFloat) -> CGFloat {
+        switch viewMode {
+        case .preview: return total
+        case .source:  return 0
+        case .split:   return (total - 4) * 0.5
         }
     }
 

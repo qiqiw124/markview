@@ -127,6 +127,10 @@ final class Updater: ObservableObject {
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("MarkView/\(currentVersion)", forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 15
+        // 如果有 token 文件就带上认证头，避免 GitHub API 限频（60 → 5000 req/h）
+        if let token = Self.githubToken {
+            req.setValue("token \(token)", forHTTPHeaderField: "Authorization")
+        }
         let (data, resp) = try await URLSession.shared.data(for: req)
         if let http = resp as? HTTPURLResponse {
             if http.statusCode == 404 { throw UpdaterError.noRelease }
@@ -135,6 +139,18 @@ final class Updater: ObservableObject {
             }
         }
         return try parseRelease(data)
+    }
+
+    /// 从 ~/.markview/github_token 读取 GitHub Personal Access Token。
+    /// 文件只含一行 token 文本，用来避免 API 限频。不存在时走未认证请求。
+    private static var githubToken: String? {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".markview/github_token")
+        guard let data = try? Data(contentsOf: url),
+              let token = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines,
+              ).trimmingCharacters(in: .newlines),
+              !token.isEmpty else { return nil }
+        return token
     }
 
     private func parseRelease(_ data: Data) throws -> ReleaseInfo {
@@ -186,6 +202,9 @@ final class Updater: ObservableObject {
     func downloadAndInstall() async {
         guard case .available(let release) = state else { return }
 
+        // 立即显示下载进度，避免用户以为卡住
+        state = .downloading(progress: 0)
+
         // 当前 .app 所在目录可写？从 DMG / 只读位置运行时直接报错
         let appURL = Bundle.main.bundleURL
         let parent = appURL.deletingLastPathComponent()
@@ -222,7 +241,7 @@ final class Updater: ObservableObject {
             return
         }
 
-        // 3. 写替换脚本：等旧进程退出 -> swap -> 去隔离 + 重签 -> 重启 -> 清理
+        // 3. 写替换脚本：kill 旧进程 -> swap -> 去隔离 + 重签 -> 重启 -> 清理
         let processName = ProcessInfo.processInfo.processName
         let scriptURL = tmpDir.appendingPathComponent("update.sh")
         let script = """
@@ -232,14 +251,22 @@ final class Updater: ObservableObject {
         OLD_APP="$APP_PATH.old"
         PROC_NAME="\(processName)"
 
-        # 等旧进程退出（最多 30s）
+        # 先发 SIGTERM 让旧进程退出
+        killall "$PROC_NAME" 2>/dev/null || true
+
+        # 等旧进程退出（最多 10s）
         i=0
-        while [ $i -lt 150 ]; do
+        while [ $i -lt 50 ]; do
           if ! pgrep -x "$PROC_NAME" > /dev/null 2>&1; then break; fi
           sleep 0.2
           i=$((i + 1))
         done
-        sleep 0.3
+
+        # 还没退出就 SIGKILL 强杀
+        if pgrep -x "$PROC_NAME" > /dev/null 2>&1; then
+          killall -9 "$PROC_NAME" 2>/dev/null || true
+          sleep 0.5
+        fi
 
         # swap：旧的先挪到 .old，新的就位，再删 .old；新就位失败则回滚
         rm -rf "$OLD_APP"
@@ -268,7 +295,7 @@ final class Updater: ObservableObject {
             return
         }
 
-        // 4. 启动脚本，然后退出当前 app
+        // 4. 启动脚本，然后立即退出当前 app（脚本会主动 killall + 等进程退出）
         do {
             let proc = Process()
             proc.executableURL = scriptURL
@@ -277,7 +304,7 @@ final class Updater: ObservableObject {
             state = .error("无法启动更新脚本：\(error.localizedDescription)")
             return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+        DispatchQueue.main.async {
             NSApp.terminate(nil)
         }
     }
