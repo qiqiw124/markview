@@ -204,6 +204,7 @@ final class Updater: ObservableObject {
 
         // 立即显示下载进度，避免用户以为卡住
         state = .downloading(progress: 0)
+        await Task.yield() // 让 SwiftUI 有机会渲染进度条
 
         // 当前 .app 所在目录可写？从 DMG / 只读位置运行时直接报错
         let appURL = Bundle.main.bundleURL

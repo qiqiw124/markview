@@ -47,6 +47,8 @@ struct UpdateView: View {
                 ProgressView().controlSize(.large)
             } else if case .idle = updater.state {
                 ProgressView().controlSize(.large)
+            } else if case .downloading(let p) = updater.state, p == 0 {
+                ProgressView().controlSize(.large)
             } else {
                 Image(systemName: icon)
                     .font(.system(size: 40))
@@ -80,8 +82,12 @@ struct UpdateView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         case .downloading(let p):
             VStack(spacing: 6) {
-                ProgressView(value: p)
-                Text("\(Int(p * 100))%").font(.caption).foregroundStyle(.secondary)
+                if p > 0 {
+                    ProgressView(value: p)
+                    Text("\(Int(p * 100))%").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    ProgressView("正在下载更新…")
+                }
             }
         case .extracting:
             ProgressView("正在安装更新…").frame(maxWidth: .infinity)

@@ -375,8 +375,39 @@ enum MarkdownParser {
     private static func replaceItalic(_ s: String) -> String {
         var out = s
         out = replacePair(out, marker: "*", tag: "em")
-        out = replacePair(out, marker: "_", tag: "em")
+        out = replaceWordBoundaryItalic(out)
         return out
+    }
+
+    /// 只处理单词边界的 `_` 斜体（避免匹配 `map_hotel` 等标识符中的下划线）。
+    private static func replaceWordBoundaryItalic(_ s: String) -> String {
+        var out = ""
+        var idx = s.startIndex
+        while idx < s.endIndex {
+            if s[idx] == "_" {
+                let beforeOk = idx == s.startIndex || !isWordChar(s[s.index(before: idx)])
+                if beforeOk {
+                    let contentStart = s.index(after: idx)
+                    if let closeIdx = s[contentStart..<s.endIndex].firstIndex(of: "_") {
+                        let afterOk = s.index(after: closeIdx) == s.endIndex || !isWordChar(s[s.index(after: closeIdx)])
+                        if afterOk {
+                            out.append("<em>")
+                            out.append(contentsOf: s[contentStart..<closeIdx])
+                            out.append("</em>")
+                            idx = s.index(after: closeIdx)
+                            continue
+                        }
+                    }
+                }
+            }
+            out.append(s[idx])
+            idx = s.index(after: idx)
+        }
+        return out
+    }
+
+    private static func isWordChar(_ c: Character) -> Bool {
+        c.isLetter || c.isNumber || c == "_"
     }
 
     private static func replaceStrikethrough(_ s: String) -> String {
