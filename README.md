@@ -39,6 +39,16 @@ MARKVIEW_ARCHS=arm64 ./build-scripts/package.sh   # 只出 Apple Silicon
 
 ## 发布新版本（触发用户侧自动更新）
 
+一条命令搞定（提交干净的前提下）：
+
+```bash
+GITHUB_TOKEN=ghp_xxx ./build-scripts/publish.sh
+```
+
+它会依次：校验 token → 确认 `dist/MarkView.zip` 的版本与 `Info.plist` 一致 → 打 tag `vX.Y.Z` 并推送 → 建 Release → 上传 `MarkView.zip`。
+
+手动发布的话：
+
 1. 改 `build-scripts/Info.plist` 里的 `CFBundleShortVersionString` / `CFBundleVersion`
 2. `./build-scripts/package.sh`
 3. 在 GitHub 创建 release，tag 用 `v1.0.8`（**必须大于用户当前版本号**才会提示更新），上传 `dist/MarkView.zip` 作为 asset（文件名必须叫 `MarkView.zip`）
