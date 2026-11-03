@@ -62,7 +62,11 @@ enum UpdaterError: LocalizedError {
 final class Updater: ObservableObject {
     static let shared = Updater()
 
-    private static let apiURL = URL(string: "https://api.github.com/repos/qiqiw124/markview/releases/latest")!
+    private static let repo = "qiqiw124/markview"
+    private static let zipAssetName = "MarkView.zip"
+    private static let apiURL = URL(string: "https://api.github.com/repos/\(repo)/releases/latest")!
+    /// 不走 api.github.com 的退路，没有匿名限额。
+    private static let atomURL = URL(string: "https://github.com/\(repo)/releases.atom")!
 
     @Published var state: UpdaterState = .idle
     /// 是否弹出更新窗口（菜单检查 + 启动后静默检查都可触发）
@@ -123,12 +127,39 @@ final class Updater: ObservableObject {
     }
 
     private func fetchLatestRelease() async throws -> ReleaseInfo {
+        // 先走 API（信息最全）；API 不通就退回 releases.atom。
+        // 退路很关键：api.github.com 匿名限额是 60 次/小时/IP，公司网络或共享代理
+        // 出口很容易被打满，此时 API 恒返回 403，只走 API 的话更新检查会静默失效。
+        // releases.atom 走 github.com，没有这个限额。
+        var apiError: Error?
+        do {
+            if let token = Self.githubToken, !Self.tokenRejected {
+                do {
+                    return try await requestRelease(token: token)
+                } catch UpdaterError.networkError(let msg) where msg.contains("401") || msg.contains("403") {
+                    // token 已过期/被吊销：本次运行内不再重试，落回匿名
+                    Self.tokenRejected = true
+                }
+            }
+            return try await requestRelease(token: nil)
+        } catch {
+            apiError = error
+        }
+
+        do {
+            return try await fetchFromAtom()
+        } catch {
+            throw apiError ?? error
+        }
+    }
+
+    /// API 路径：api.github.com/repos/<repo>/releases/latest
+    private func requestRelease(token: String?) async throws -> ReleaseInfo {
         var req = URLRequest(url: Self.apiURL)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("MarkView/\(currentVersion)", forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 15
-        // 如果有 token 文件就带上认证头，避免 GitHub API 限频（60 → 5000 req/h）
-        if let token = Self.githubToken {
+        if let token {
             req.setValue("token \(token)", forHTTPHeaderField: "Authorization")
         }
         let (data, resp) = try await URLSession.shared.data(for: req)
@@ -140,6 +171,45 @@ final class Updater: ObservableObject {
         }
         return try parseRelease(data)
     }
+
+    /// 退路：解析 https://github.com/<repo>/releases.atom。
+    /// feed 按 <updated> 排序，不是按版本号（老 release 被编辑过就会排到前面），
+    /// 所以必须把所有 entry 都拿出来比版本号，取最大的那个。
+    private func fetchFromAtom() async throws -> ReleaseInfo {
+        var req = URLRequest(url: Self.atomURL)
+        req.setValue("MarkView/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+        req.setValue("application/atom+xml, application/xml;q=0.9, */*;q=0.8",
+                     forHTTPHeaderField: "Accept")
+        req.timeoutInterval = 15
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw UpdaterError.networkError("HTTP \(http.statusCode)")
+        }
+
+        let entries = AtomReleaseParser().parse(data)
+        guard var best = entries.first else { throw UpdaterError.noRelease }
+        for e in entries.dropFirst() where isVersion(e.version, newerThan: best.version) {
+            best = e
+        }
+
+        let tag = best.tag.isEmpty ? "v\(best.version)" : best.tag
+        guard let dl = URL(string:
+            "https://github.com/\(Self.repo)/releases/download/\(tag)/\(Self.zipAssetName)") else {
+            throw UpdaterError.noZipAsset
+        }
+        return ReleaseInfo(
+            tag: tag,
+            version: best.version,
+            name: best.title.isEmpty ? tag : best.title,
+            body: best.body,
+            downloadURL: dl,
+            htmlURL: URL(string: best.htmlURL) ?? Self.atomURL,
+            publishedAt: best.updated
+        )
+    }
+
+    /// 记录 token 是否已被 GitHub 拒绝，避免每次检查都白跑一次 401。
+    private static var tokenRejected = false
 
     /// 从 ~/.markview/github_token 读取 GitHub Personal Access Token。
     /// 文件只含一行 token 文本，用来避免 API 限频。不存在时走未认证请求。
@@ -242,7 +312,10 @@ final class Updater: ObservableObject {
             return
         }
 
-        // 3. 写替换脚本：kill 旧进程 -> swap -> 去隔离 + 重签 -> 重启 -> 清理
+        // 3. 写替换脚本：kill 旧进程 -> 校验新包签名 -> swap -> 去隔离 -> 重启 -> 清理
+        //    关键点（macOS 26/27）：bundle 内容与签名必须严格一致，否则系统报
+        //    「已损坏，无法打开」。历史上 updates 曾在 Contents/MacOS 里留下
+        //    MarkView.bak，导致整包签名失效。这里每一步都校验 + 失败回滚。
         let processName = ProcessInfo.processInfo.processName
         let scriptURL = tmpDir.appendingPathComponent("update.sh")
         let script = """
@@ -251,6 +324,15 @@ final class Updater: ObservableObject {
         NEW_APP="\(newAppURL.path)"
         OLD_APP="$APP_PATH.old"
         PROC_NAME="\(processName)"
+        LOG="/tmp/markview-update.log"
+
+        exec >>"$LOG" 2>&1
+        echo "=== $(date '+%F %T') 开始更新 $APP_PATH ==="
+
+        # 上次异常中断的残留：.old 还在、正主没了 -> 先恢复
+        if [ -d "$OLD_APP" ] && [ ! -d "$APP_PATH" ]; then
+          mv "$OLD_APP" "$APP_PATH"
+        fi
 
         # 先发 SIGTERM 让旧进程退出
         killall "$PROC_NAME" 2>/dev/null || true
@@ -269,20 +351,50 @@ final class Updater: ObservableObject {
           sleep 0.5
         fi
 
+        # 清掉包里不该有的残留文件（.bak/.old/.DS_Store），它们会让签名失效
+        xattr -dr com.apple.quarantine "$NEW_APP" 2>/dev/null || true
+        find "$NEW_APP" -name "*.bak" -delete 2>/dev/null || true
+        find "$NEW_APP" -name "*.old" -delete 2>/dev/null || true
+        find "$NEW_APP" -name ".DS_Store" -delete 2>/dev/null || true
+
+        # 新包签名校验；不合法就地 ad-hoc 补签，补签仍失败就中止（旧版本保持不动）
+        if ! codesign --verify --strict "$NEW_APP" >/dev/null 2>&1; then
+          echo "新包签名无效，尝试 ad-hoc 重签"
+          codesign --remove-signature "$NEW_APP" 2>/dev/null || true
+          codesign --force --sign - "$NEW_APP" 2>/dev/null || true
+        fi
+        if ! codesign --verify --strict "$NEW_APP" >/dev/null 2>&1; then
+          echo "✗ 新包签名仍无效，放弃更新"
+          open "$APP_PATH"
+          exit 1
+        fi
+
         # swap：旧的先挪到 .old，新的就位，再删 .old；新就位失败则回滚
         rm -rf "$OLD_APP"
         mv "$APP_PATH" "$OLD_APP" || exit 1
         if ! mv "$NEW_APP" "$APP_PATH"; then
           mv "$OLD_APP" "$APP_PATH"
+          open "$APP_PATH"
+          exit 1
+        fi
+
+        # 换位后再校验一次，坏了直接回滚（避免留下打不开的 app）
+        if ! codesign --verify --strict "$APP_PATH" >/dev/null 2>&1; then
+          echo "✗ 换位后签名校验失败，回滚"
+          rm -rf "$APP_PATH"
+          mv "$OLD_APP" "$APP_PATH"
+          open "$APP_PATH"
           exit 1
         fi
         rm -rf "$OLD_APP"
 
-        # 去隔离 + ad-hoc 重签
+        # 去隔离（自更新不走浏览器，通常没有，保险起见）
         xattr -dr com.apple.quarantine "$APP_PATH" 2>/dev/null || true
-        codesign --force --deep --sign - "$APP_PATH" 2>/dev/null || true
 
-        # 重启
+        # 刷新 LaunchServices 注册，避免图标/关联信息还是旧的
+        /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_PATH" 2>/dev/null || true
+
+        echo "✓ 更新完成，重启"
         open "$APP_PATH"
 
         # 清理临时目录
@@ -412,5 +524,81 @@ private final class DownloadHandler: NSObject, URLSessionDownloadDelegate {
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let error { finish(.failure(error)) }
+    }
+}
+
+// MARK: - releases.atom 解析
+
+/// 解析 GitHub 的 releases.atom。只取更新检查需要的四个字段。
+/// 用 XMLParser 而不是正则/JSONSerialization：content 里是转义过的 HTML，
+/// 交给 XML 解析器还原实体最稳。
+private final class AtomReleaseParser: NSObject, XMLParserDelegate {
+
+    struct Entry {
+        var tag = ""        // 如 "v1.0.6"
+        var title = ""
+        var body = ""
+        var htmlURL = ""
+        var updated: Date?
+        var version: String { tag.hasPrefix("v") ? String(tag.dropFirst()) : tag }
+    }
+
+    private var entries: [Entry] = []
+    private var current: Entry?
+    private var buffer = ""
+    private var iso = ISO8601DateFormatter()
+
+    func parse(_ data: Data) -> [Entry] {
+        let parser = XMLParser(data: data)
+        parser.delegate = self
+        parser.shouldProcessNamespaces = false
+        parser.parse()
+        return entries
+    }
+
+    func parser(_ parser: XMLParser, didStartElement elementName: String,
+                namespaceURI: String?, qualifiedName qName: String?,
+                attributes attributeDict: [String: String]) {
+        buffer = ""
+        if elementName == "entry" {
+            current = Entry()
+            return
+        }
+        // 更可靠的 tag 来源：<link rel="alternate" href=".../releases/tag/v1.0.6"/>
+        if elementName == "link", current != nil,
+           attributeDict["rel"] == "alternate",
+           let href = attributeDict["href"] {
+            current?.htmlURL = href
+            if let r = href.range(of: "/releases/tag/") {
+                current?.tag = String(href[r.upperBound...])
+            }
+        }
+    }
+
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        buffer += string
+    }
+
+    func parser(_ parser: XMLParser, didEndElement elementName: String,
+                namespaceURI: String?, qualifiedName qName: String?) {
+        guard current != nil else { buffer = ""; return }
+        switch elementName {
+        case "title":
+            current?.title = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        case "content":
+            current?.body = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        case "updated":
+            current?.updated = iso.date(from: buffer.trimmingCharacters(in: .whitespacesAndNewlines))
+        case "entry":
+            if var e = current {
+                // 没有 link 时用 title 当 tag
+                if e.tag.isEmpty { e.tag = e.title }
+                entries.append(e)
+            }
+            current = nil
+        default:
+            break
+        }
+        buffer = ""
     }
 }
